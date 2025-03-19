@@ -92,6 +92,18 @@ class PPODataset(Dataset):
         """Return the number of minibatches."""
         return self.length
 
+class AdvPPODataset(PPODataset):
+    def update_adv_mu_sigma(self, mu, sigma):
+        """Update the mu and sigma values in the dataset."""
+        start, end = self.last_range
+        # Ensure the permutation does not break the logic for updating.
+        #if self.permute:
+        #    original_indices = self.permutation_indices[start:end]
+        #    self.values_dict['mu'][original_indices] = mu
+        #    self.values_dict['sigma'][original_indices] = sigma
+        #else:
+        self.values_dict['adv_mu'][start:end] = mu
+        self.values_dict['adv_sigma'][start:end] = sigma
 
 
 

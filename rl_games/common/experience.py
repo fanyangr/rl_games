@@ -415,3 +415,25 @@ class ExperienceBuffer:
                 res_dict[k] = transform_op(v)
         
         return res_dict
+
+class AdvExperienceBuffer(ExperienceBuffer):
+
+    def _init_from_env_info(self, env_info):
+        adv_action_shape = (6,)
+        obs_base_shape = self.obs_base_shape
+        state_base_shape = self.state_base_shape
+        super()._init_from_env_info(env_info)
+        val_space = gym.spaces.Box(low=0, high=1,shape=(env_info.get('value_size',1),))
+        self.tensor_dict['adv_values'] = self._create_tensor_from_space(val_space, obs_base_shape)
+        self.tensor_dict['adv_neglogpacs'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=(), dtype=np.float32), obs_base_shape)
+
+        if self.is_discrete or self.is_multi_discrete:
+            pass
+            # self.tensor_dict['actions'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=self.actions_shape, dtype=int), obs_base_shape)
+        if self.use_action_masks:
+            pass
+            # self.tensor_dict['action_masks'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=(np.sum(self.actions_num),), dtype=bool), obs_base_shape)
+        if self.is_continuous:
+            self.tensor_dict['adv_actions'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=adv_action_shape, dtype=np.float32), obs_base_shape)
+            self.tensor_dict['adv_mus'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=adv_action_shape, dtype=np.float32), obs_base_shape)
+            self.tensor_dict['adv_sigmas'] = self._create_tensor_from_space(gym.spaces.Box(low=0, high=1,shape=adv_action_shape, dtype=np.float32), obs_base_shape)
