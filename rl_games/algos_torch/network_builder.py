@@ -9,6 +9,7 @@ from rl_games.algos_torch.sac_helper import  SquashedNormal
 from rl_games.common.layers.recurrent import  GRUWithDones, LSTMWithDones
 from rl_games.common.layers.value import  TwoHotEncodedValue, DefaultValue
 from rl_games.algos_torch.spatial_softmax import SpatialSoftArgmax
+from rl_games.algos_torch.pointnet import PointNet
 
 
 def _create_initializer(func, **kwargs):
@@ -180,6 +181,8 @@ class NetworkBuilder:
                 elif norm_func_name == 'batch_norm':
                     layers.append(torch.nn.BatchNorm2d(in_channels))  
             return nn.Sequential(*layers)
+        def _build_pointnet(self):
+            return PointNet(k=self.pointnet_output_dim, normal_channel=False)
 
         def _build_value_layer(self, input_size, output_size, value_type='legacy'):
             if value_type == 'legacy':
@@ -213,6 +216,8 @@ class A2CBuilder(NetworkBuilder):
             self.critic_cnn = nn.Sequential()
             self.actor_mlp = nn.Sequential()
             self.critic_mlp = nn.Sequential()
+            self.actor_pointnet = nn.Sequential()
+            self.critic_pointnet = nn.Sequential()
             
             if self.has_cnn:
                 if self.permute_input:
@@ -263,6 +268,12 @@ class A2CBuilder(NetworkBuilder):
                     self.rnn = self._build_rnn(self.rnn_name, rnn_in_size, self.rnn_units, self.rnn_layers)
                     if self.rnn_ln:
                         self.layer_norm = torch.nn.LayerNorm(self.rnn_units)
+            
+            if self.has_pointnet:
+                self.actor_pointnet = self._build_pointnet()
+                if self.separate:
+                    self.critic_pointnet = self._build_pointnet()
+                mlp_input_size = self.pointnet_output_dim + (mlp_input_size - 3 * self.num_points)
 
             mlp_args = {
                 'input_size' : mlp_input_size,
@@ -303,6 +314,9 @@ class A2CBuilder(NetworkBuilder):
             if self.has_cnn:
                 cnn_init = self.init_factory.create(**self.cnn['initializer'])
 
+            if self.has_pointnet:
+                cnn_init = self.init_factory.create(**self.pointnet['initializer'])
+
             for m in self.modules():         
                 if isinstance(m, nn.Conv2d) or isinstance(m, nn.Conv1d):
                     cnn_init(m.weight)
@@ -334,6 +348,7 @@ class A2CBuilder(NetworkBuilder):
                     obs = obs.permute((0, 3, 1, 2))
 
             if self.separate:
+                # TODO: fill in the code for seperate 
                 a_out = c_out = obs
                 a_out = self.actor_cnn(a_out)
                 a_out = a_out.contiguous().view(a_out.size(0), -1)
@@ -417,10 +432,19 @@ class A2CBuilder(NetworkBuilder):
                         sigma = self.sigma_act(self.sigma(a_out))
 
                     return mu, sigma, value, states
+                
             else:
                 out = obs
                 out = self.actor_cnn(out)
-                out = out.flatten(1)                
+                out = out.flatten(1)      
+                if self.num_points > 0:
+                    pointnet_input = obs[:, -3*self.num_points:]
+                    regular_obs = obs[:, :-3*self.num_points]
+                    batch_size = pointnet_input.size()[0]
+                    pointnet_input = pointnet_input.reshape(batch_size, self.num_points, 3)
+                    pointnet_input = pointnet_input.transpose(1, 2) # change from [B, N, 3] in to [B, 3, N], as that is requred by pointnet module
+                    pointnet_out = self.actor_pointnet(pointnet_input) 
+                    out = torch.cat((regular_obs, pointnet_out), dim=-1)
 
                 if self.has_rnn:
                     seq_length = obs_dict.get('seq_length', 1)
@@ -550,6 +574,14 @@ class A2CBuilder(NetworkBuilder):
                 self.permute_input = self.cnn.get('permute_input', True)
             else:
                 self.has_cnn = False
+
+            self.has_pointnet = 'pointnet' in params
+            if self.has_pointnet:
+                self.num_points = params['pointnet']['num_points']
+                self.pointnet = params['pointnet']
+                self.pointnet_output_dim = params['pointnet']['output_dim']
+            else:
+                self.num_points = 0
 
     def build(self, name, **kwargs):
         net = A2CBuilder.Network(self.params, **kwargs)
