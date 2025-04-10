@@ -35,9 +35,9 @@ class PointNet(nn.Module):
         else:
             channel = 3
         self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel)
-        self.fc1 = nn.Linear(256, 256)
+        self.fc1 = nn.Linear(256, 128)
         self.fc2 = nn.Linear(128, k)
-        self.bn1 = nn.BatchNorm1d(256)
+        self.bn1 = nn.BatchNorm1d(128)
         self.relu = nn.ReLU()
 
     def forward(self, x):
