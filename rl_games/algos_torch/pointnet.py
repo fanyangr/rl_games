@@ -125,7 +125,7 @@ class STN3d(nn.Module):
         iden = Variable(torch.from_numpy(np.array([1, 0, 0, 0, 1, 0, 0, 0, 1]).astype(np.float32))).view(1, 9).repeat(
             batchsize, 1)
         if x.is_cuda:
-            iden = iden.cuda()
+            iden = iden.to(x.device)
         x = x + iden
         x = x.view(-1, 3, 3)
         return x
