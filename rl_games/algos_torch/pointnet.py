@@ -6,27 +6,6 @@ from torch.autograd import Variable
 import numpy as np
 import time
 
-# class PointNet(nn.Module):
-#     def __init__(self, k=40, normal_channel=False):
-#         super(PointNet, self).__init__()
-#         if normal_channel:
-#             channel = 6
-#         else:
-#             channel = 3
-#         self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel)
-#         self.fc1 = nn.Linear(256, 256)
-#         self.fc2 = nn.Linear(256, 128)
-#         self.fc3 = nn.Linear(128, k)
-#         self.bn1 = nn.BatchNorm1d(256)
-#         self.bn2 = nn.BatchNorm1d(128)
-#         self.relu = nn.ReLU()
-
-#     def forward(self, x):
-#         x, trans, trans_feat = self.feat(x)        
-#         x = F.relu(self.bn1(self.fc1(x)))
-#         x = F.relu(self.bn2(self.fc2(x)))
-#         x = self.fc3(x)
-#         return x
 class PointNet(nn.Module):
     def __init__(self, k=40, normal_channel=False):
         super(PointNet, self).__init__()
@@ -35,16 +14,37 @@ class PointNet(nn.Module):
         else:
             channel = 3
         self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel)
-        self.fc1 = nn.Linear(256, 128)
-        self.fc2 = nn.Linear(128, k)
-        self.bn1 = nn.BatchNorm1d(128)
+        self.fc1 = nn.Linear(256, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, k)
+        self.bn1 = nn.BatchNorm1d(256)
+        self.bn2 = nn.BatchNorm1d(128)
         self.relu = nn.ReLU()
 
     def forward(self, x):
         x, trans, trans_feat = self.feat(x)        
         x = F.relu(self.bn1(self.fc1(x)))
-        x = self.fc2(x)
+        x = F.relu(self.bn2(self.fc2(x)))
+        x = self.fc3(x)
         return x
+# class PointNet(nn.Module):
+#     def __init__(self, k=40, normal_channel=False):
+#         super(PointNet, self).__init__()
+#         if normal_channel:
+#             channel = 6
+#         else:
+#             channel = 3
+#         self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel)
+#         self.fc1 = nn.Linear(256, 128)
+#         self.fc2 = nn.Linear(128, k)
+#         self.bn1 = nn.BatchNorm1d(128)
+#         self.relu = nn.ReLU()
+
+#     def forward(self, x):
+#         x, trans, trans_feat = self.feat(x)        
+#         x = F.relu(self.bn1(self.fc1(x)))
+#         x = self.fc2(x)
+#         return x
 class PointNetEncoder(nn.Module):
     def __init__(self, global_feat=True, feature_transform=False, channel=3):
         super(PointNetEncoder, self).__init__()
