@@ -182,7 +182,7 @@ class NetworkBuilder:
                     layers.append(torch.nn.BatchNorm2d(in_channels))  
             return nn.Sequential(*layers)
         def _build_pointnet(self):
-            return PointNet(k=self.pointnet_output_dim, normal_channel=False)
+            return PointNet(k=self.pointnet_output_dim, normal_channel=False, center_input=True)
 
         def _build_value_layer(self, input_size, output_size, value_type='legacy'):
             if value_type == 'legacy':

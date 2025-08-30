@@ -1,19 +1,17 @@
+import torch
 import torch.nn as nn
-import torch.utils.data
 import torch.nn.functional as F
-import torch.nn.parallel
 from torch.autograd import Variable
 import numpy as np
-import time
 
 class PointNet(nn.Module):
-    def __init__(self, k=40, normal_channel=False):
+    def __init__(self, k=40, normal_channel=False, center_input=False):
         super(PointNet, self).__init__()
         if normal_channel:
             channel = 6
         else:
             channel = 3
-        self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel)
+        self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel, center_input=center_input)
         self.fc1 = nn.Linear(256, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, k)
@@ -46,7 +44,7 @@ class PointNet(nn.Module):
 #         x = self.fc2(x)
 #         return x
 class PointNetEncoder(nn.Module):
-    def __init__(self, global_feat=True, feature_transform=False, channel=3):
+    def __init__(self, global_feat=True, feature_transform=False, channel=3, center_input=False):
         super(PointNetEncoder, self).__init__()
         self.stn = STN3d(channel)
         self.conv1 = torch.nn.Conv1d(channel, 16, 1)
@@ -57,11 +55,21 @@ class PointNetEncoder(nn.Module):
         self.bn3 = nn.BatchNorm1d(256)
         self.global_feat = global_feat
         self.feature_transform = feature_transform
+        self.center_input = center_input
         if self.feature_transform:
             self.fstn = STNkd(k=16)
 
     def forward(self, x):
         B, D, N = x.size()  # NOTE: the input shape is different, it is B, D, N
+
+        if self.center_input:
+            if D >= 3:
+                centroid = x[:, :3, :].mean(dim=2, keepdim=True)
+                if D > 3:
+                    x = torch.cat([x[:, :3, :] - centroid, x[:, 3:, :]], dim=1)
+                else:
+                    x = x[:, :3, :] - centroid
+
         trans = self.stn(x)
         x = x.transpose(2, 1)
         if D > 3:
