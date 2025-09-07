@@ -5,22 +5,30 @@ from torch.autograd import Variable
 import numpy as np
 
 class PointNet(nn.Module):
-    def __init__(self, k=40, normal_channel=False, center_input=False):
+    def __init__(self, k=40, normal_channel=False, center_input=False, history_length=1):
         super(PointNet, self).__init__()
         if normal_channel:
             channel = 6
         else:
             channel = 3
         self.feat = PointNetEncoder(global_feat=True, feature_transform=False, channel=channel, center_input=center_input)
-        self.fc1 = nn.Linear(256, 256)
+        self.fc1 = nn.Linear(256 * history_length, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, k)
         self.bn1 = nn.BatchNorm1d(256)
         self.bn2 = nn.BatchNorm1d(128)
         self.relu = nn.ReLU()
+        self.history_length = history_length # it can take pointcloud of multiple frames
 
     def forward(self, x):
-        x, trans, trans_feat = self.feat(x)        
+        # x has shape [B, 3, N * history_length]
+        x = x.reshape(x.size(0), x.size(1), x.size(2) // self.history_length, self.history_length)
+        pointcloud_features = []
+        for i in range(self.history_length):
+            pointcloud_feature, trans, trans_feat = self.feat(x[:, :, :, i])
+            pointcloud_features.append(pointcloud_feature)
+        x = torch.cat(pointcloud_features, dim=-1)
+        # x, trans, trans_feat = self.feat(x)        
         x = F.relu(self.bn1(self.fc1(x)))
         x = F.relu(self.bn2(self.fc2(x)))
         x = self.fc3(x)

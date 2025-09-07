@@ -182,7 +182,7 @@ class NetworkBuilder:
                     layers.append(torch.nn.BatchNorm2d(in_channels))  
             return nn.Sequential(*layers)
         def _build_pointnet(self):
-            return PointNet(k=self.pointnet_output_dim, normal_channel=False, center_input=True)
+            return PointNet(k=self.pointnet_output_dim, normal_channel=False, center_input=True, history_length=self.history_length)
 
         def _build_value_layer(self, input_size, output_size, value_type='legacy'):
             if value_type == 'legacy':
@@ -273,7 +273,7 @@ class A2CBuilder(NetworkBuilder):
                 self.actor_pointnet = self._build_pointnet()
                 if self.separate:
                     self.critic_pointnet = self._build_pointnet()
-                mlp_input_size = self.pointnet_output_dim + (mlp_input_size - 3 * self.num_points)
+                mlp_input_size = self.pointnet_output_dim + (mlp_input_size - 3 * self.num_points * self.history_length)
 
             mlp_args = {
                 'input_size' : mlp_input_size,
@@ -438,10 +438,10 @@ class A2CBuilder(NetworkBuilder):
                 out = self.actor_cnn(out)
                 out = out.flatten(1)      
                 if self.num_points > 0:
-                    pointnet_input = obs[:, -3*self.num_points:]
-                    regular_obs = obs[:, :-3*self.num_points]
+                    pointnet_input = obs[:, -3*self.num_points * self.history_length:]
+                    regular_obs = obs[:, :-3*self.num_points * self.history_length]
                     batch_size = pointnet_input.size()[0]
-                    pointnet_input = pointnet_input.reshape(batch_size, self.num_points, 3)
+                    pointnet_input = pointnet_input.reshape(batch_size, self.num_points * self.history_length, 3)
                     pointnet_input = pointnet_input.transpose(1, 2) # change from [B, N, 3] in to [B, 3, N], as that is requred by pointnet module
                     pointnet_out = self.actor_pointnet(pointnet_input) 
                     out = torch.cat((regular_obs, pointnet_out), dim=-1)
@@ -578,6 +578,10 @@ class A2CBuilder(NetworkBuilder):
             self.has_pointnet = 'pointnet' in params
             if self.has_pointnet:
                 self.num_points = params['pointnet']['num_points']
+                if 'history_length' in params:
+                    self.history_length = params['history_length']
+                else:
+                    self.history_length = 1
                 self.pointnet = params['pointnet']
                 self.pointnet_output_dim = params['pointnet']['output_dim']
             else:
