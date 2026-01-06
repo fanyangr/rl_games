@@ -167,7 +167,7 @@ class Runner:
 
         # mode="max-autotune" would be faster at runtime, but it has a much
         # longer compilation time. "reduce-overhead" gives a good trade‑off.
-        agent.model = torch.compile(agent.model, mode="reduce-overhead")
+        # agent.model = torch.compile(agent.model, mode="reduce-overhead")
 
         agent.train()
 

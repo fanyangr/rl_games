@@ -47,7 +47,8 @@ class BaseModelNetwork(nn.Module):
             self.value_mean_std = torch.jit.script(RunningMeanStd((self.value_size,)))
         if normalize_input:
             if isinstance(obs_shape, dict):
-                self.running_mean_std = torch.jit.script(RunningMeanStdObs(obs_shape))
+                # self.running_mean_std = torch.jit.script(RunningMeanStdObs(obs_shape))
+                self.running_mean_std = RunningMeanStdObs(obs_shape)
             else:
                 self.running_mean_std = torch.jit.script(RunningMeanStd(obs_shape))
 
@@ -72,7 +73,7 @@ class ModelA2C(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -133,7 +134,7 @@ class ModelA2CMultiDiscrete(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -207,7 +208,7 @@ class ModelA2CContinuous(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -231,6 +232,9 @@ class ModelA2CContinuous(BaseModel):
             prev_actions = input_dict.get('prev_actions', None)
             input_dict['obs'] = self.norm_obs(input_dict['obs'])
             mu, sigma, value, states = self.a2c_network(input_dict)
+            # Clamp sigma to prevent numerical issues and ensure std >= 0.0
+            # Range: [1e-6, 10.0] - allows near-deterministic to high exploration
+            sigma = torch.clamp(sigma, min=1e-6, max=100.0)
             distr = torch.distributions.Normal(mu, sigma, validate_args=False)
 
             if is_train:
@@ -269,7 +273,7 @@ class ModelA2CContinuousLogStd(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -284,13 +288,17 @@ class ModelA2CContinuousLogStd(BaseModel):
             return self.a2c_network.get_default_rnn_state()
 
         def forward(self, input_dict):
-            torch.compiler.cudagraph_mark_step_begin()
+            # Comment out the line below:
+            # torch.compiler.cudagraph_mark_step_begin()
 
             is_train = input_dict.get('is_train', True)
             prev_actions = input_dict.get('prev_actions', None)
             input_dict['obs'] = self.norm_obs(input_dict['obs'])
             mu, logstd, value, states = self.a2c_network(input_dict)
             sigma = torch.exp(logstd)
+            # Clamp sigma to prevent numerical issues and ensure std >= 0.0
+            # Range: [1e-6, 10.0] - allows near-deterministic to high exploration
+            sigma = torch.clamp(sigma, min=1e-6, max=100.0)
             distr = torch.distributions.Normal(mu, sigma, validate_args=False)
             if is_train:
                 entropy = distr.entropy().sum(dim=-1)
@@ -334,7 +342,7 @@ class ModelA2CContinuousTanh(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -391,7 +399,7 @@ class ModelCentralValue(BaseModel):
         def __init__(self, a2c_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.a2c_network = a2c_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.a2c_network.get_aux_loss()
@@ -433,7 +441,7 @@ class ModelSACContinuous(BaseModel):
         def __init__(self, sac_network, **kwargs):
             BaseModelNetwork.__init__(self, **kwargs)
             self.sac_network = sac_network
-            self.forward = torch.compile(mode="reduce-overhead")(self.forward)
+            # self.forward = torch.compile(mode="reduce-overhead")(self.forward)
 
         def get_aux_loss(self):
             return self.sac_network.get_aux_loss()

@@ -83,6 +83,10 @@ class PPODataset(Dataset):
         return input_dict
 
     def __getitem__(self, idx):
+        if idx >= self.length:
+            raise IndexError(f"Dataset index {idx} is out of range. Dataset length is {self.length}")
+        if idx < 0:
+            raise IndexError(f"Dataset index {idx} is negative")
         """Retrieve an item based on the dataset type (RNN or not)."""
         return self._get_item_rnn(idx) if self.is_rnn else self._get_item(idx)
 

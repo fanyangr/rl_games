@@ -46,6 +46,6 @@ setup(name='rl-games',
             'watchdog>=2.1.9',  # for evaluation process
       ],
       extras_require={
-            "wandb": ["wandb>=0.12.11"],
+            "wandb": ["wandb>=0.17.1"],
       },
       )
