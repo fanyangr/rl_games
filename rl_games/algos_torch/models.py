@@ -11,6 +11,7 @@ from rl_games.algos_torch.running_mean_std import RunningMeanStd, RunningMeanStd
 from rl_games.algos_torch.moving_mean_std import GeneralizedMovingStats
 from torch.distributions import Normal, TransformedDistribution, TanhTransform
 import math
+import warnings
 
 
 class BaseModel():
@@ -295,6 +296,25 @@ class ModelA2CContinuousLogStd(BaseModel):
             prev_actions = input_dict.get('prev_actions', None)
             input_dict['obs'] = self.norm_obs(input_dict['obs'])
             mu, logstd, value, states = self.a2c_network(input_dict)
+            
+            # Clamp logstd to prevent NaN/Inf before exp()
+            # This ensures exp(logstd) stays in reasonable range
+            # Range [-10, 10] gives sigma in [exp(-10), exp(10)] ≈ [4.5e-5, 22026]
+            logstd = torch.clamp(logstd, min=-10.0, max=10.0)
+            
+            # Replace any remaining NaN or Inf with safe default (log(1e-6) ≈ -13.8)
+            # This prevents exp() from producing NaN/Inf
+            logstd = torch.where(torch.isfinite(logstd), logstd, torch.full_like(logstd, -13.8))
+            
+            # Warn if NaN values still exist after clamping (should not happen, but indicates a problem)
+            if torch.isnan(logstd).any():
+                warnings.warn(
+                    f"NaN values detected in logstd after clamping. "
+                    f"Found {torch.isnan(logstd).sum().item()} NaN values out of {logstd.numel()} total. "
+                    f"This may indicate numerical instability in the network.",
+                    RuntimeWarning
+                )
+            
             sigma = torch.exp(logstd)
             # Clamp sigma to prevent numerical issues and ensure std >= 0.0
             # Range: [1e-6, 10.0] - allows near-deterministic to high exploration
