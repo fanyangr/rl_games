@@ -10,6 +10,7 @@ from rl_games.common.layers.recurrent import  GRUWithDones, LSTMWithDones
 from rl_games.common.layers.value import  TwoHotEncodedValue, DefaultValue
 from rl_games.algos_torch.spatial_softmax import SpatialSoftArgmax
 from rl_games.algos_torch.pointnet import PointNet
+from rl_games.algos_torch.ndf_transformer import NDFMlpEncoder, NDFMinimalEncoder, NDFTransformerEncoder
 
 
 def _create_initializer(func, **kwargs):
@@ -184,6 +185,50 @@ class NetworkBuilder:
         def _build_pointnet(self):
             return PointNet(k=self.pointnet_output_dim, normal_channel=False, center_input=True, history_length=self.history_length)
 
+        def _build_ndf_encoder(self):
+            cfg = self.ndf_encoder
+            encoder_type = (cfg.get('encoder_type', 'transformer') or 'transformer').lower()
+            if encoder_type == 'mlp':
+                # Debug: bypass transformer while keeping the rest of the policy unchanged.
+                # Output dim defaults to "transformer-like" flattened size (num_keypoints * d_model).
+                num_keypoints = cfg['num_keypoints']
+                ndf_feature_dim = cfg['ndf_feature_dim']
+                d_model = cfg.get('d_model', 256)
+                output_dim = cfg.get('output_dim', num_keypoints * d_model)
+                return NDFMlpEncoder(
+                    num_keypoints=num_keypoints,
+                    ndf_feature_dim=ndf_feature_dim,
+                    output_dim=output_dim,
+                    hidden_dims=cfg.get('mlp_hidden_dims', [256, 256]),
+                    activation=cfg.get('mlp_activation', cfg.get('activation', 'gelu')),
+                    dropout=cfg.get('mlp_dropout', 0.0),
+                )
+            if encoder_type == 'minimal':
+                # Transformer-like structure WITHOUT attention - tests if attention is the problem.
+                # Processes each keypoint independently: project -> LayerNorm -> activation -> flatten.
+                return NDFMinimalEncoder(
+                    num_keypoints=cfg['num_keypoints'],
+                    ndf_feature_dim=cfg['ndf_feature_dim'],
+                    d_model=cfg.get('d_model', 256),
+                    activation=cfg.get('activation', 'gelu'),
+                    layer_norm_eps=cfg.get('layer_norm_eps', 1e-5),
+                    use_keypoint_embed=True,
+                )
+            if encoder_type != 'transformer':
+                raise ValueError(f"Unknown ndf_encoder.encoder_type={encoder_type!r} (expected 'transformer', 'mlp', or 'minimal')")
+
+            return NDFTransformerEncoder(
+                num_keypoints=cfg['num_keypoints'],
+                ndf_feature_dim=cfg['ndf_feature_dim'],
+                d_model=cfg.get('d_model', 256),
+                nhead=cfg.get('nhead', 8),
+                num_encoder_layers=cfg.get('num_encoder_layers', 2),
+                dim_feedforward=cfg.get('dim_feedforward', 256),
+                dropout=cfg.get('dropout', 0.1),
+                activation=cfg.get('activation', 'gelu'),
+                layer_norm_eps=cfg.get('layer_norm_eps', 1e-5),
+            )
+
         def _build_value_layer(self, input_size, output_size, value_type='legacy'):
             if value_type == 'legacy':
                 return torch.nn.Linear(input_size, output_size)
@@ -218,7 +263,9 @@ class A2CBuilder(NetworkBuilder):
             self.critic_mlp = nn.Sequential()
             self.actor_pointnet = nn.Sequential()
             self.critic_pointnet = nn.Sequential()
-            
+            self.actor_ndf_encoder = nn.Sequential()
+            self.critic_ndf_encoder = nn.Sequential()
+
             if self.has_cnn:
                 if self.permute_input:
                     input_shape = torch_ext.shape_whc_to_cwh(input_shape)
@@ -237,8 +284,11 @@ class A2CBuilder(NetworkBuilder):
             cnn_output_size = self._calc_input_size(input_shape, self.actor_cnn)
 
             mlp_input_size = cnn_output_size
+            if self.has_ndf_encoder:
+                ndf_total = self.ndf_num_keypoints * self.ndf_feature_dim
+                mlp_input_size = cnn_output_size - ndf_total
             if len(self.units) == 0:
-                out_size = cnn_output_size
+                out_size = mlp_input_size
             else:
                 out_size = self.units[-1]
 
@@ -274,6 +324,12 @@ class A2CBuilder(NetworkBuilder):
                 if self.separate:
                     self.critic_pointnet = self._build_pointnet()
                 mlp_input_size = self.pointnet_output_dim + (mlp_input_size - 3 * self.num_points * self.history_length)
+
+            if self.has_ndf_encoder:
+                self.actor_ndf_encoder = self._build_ndf_encoder()
+                if self.separate:
+                    self.critic_ndf_encoder = self._build_ndf_encoder()
+                mlp_input_size = mlp_input_size + self.actor_ndf_encoder.output_dim
 
             mlp_args = {
                 'input_size' : mlp_input_size,
@@ -436,15 +492,28 @@ class A2CBuilder(NetworkBuilder):
             else:
                 out = obs
                 out = self.actor_cnn(out)
-                out = out.flatten(1)      
-                if self.num_points > 0:
+                out = out.flatten(1)
+                # NDF and pointnet are mutually exclusive (ndf_obs not used when point_cloud_obs is used)
+                if self.has_ndf_encoder:
+                    ndf_total = self.ndf_num_keypoints * self.ndf_feature_dim
+                    if self.ndf_obs_position == 'last':
+                        ndf_flat = obs[:, -ndf_total:]
+                        rest_obs = obs[:, :-ndf_total]
+                    else:
+                        ndf_flat = obs[:, :ndf_total]
+                        rest_obs = obs[:, ndf_total:]
+                    ndf_out = self.actor_ndf_encoder(ndf_flat)
+                    out = torch.cat([rest_obs, ndf_out], dim=-1)
+                elif self.num_points > 0:
                     pointnet_input = obs[:, -3*self.num_points * self.history_length:]
                     regular_obs = obs[:, :-3*self.num_points * self.history_length]
                     batch_size = pointnet_input.size()[0]
                     pointnet_input = pointnet_input.reshape(batch_size, self.num_points * self.history_length, 3)
-                    pointnet_input = pointnet_input.transpose(1, 2) # change from [B, N, 3] in to [B, 3, N], as that is requred by pointnet module
-                    pointnet_out = self.actor_pointnet(pointnet_input) 
+                    pointnet_input = pointnet_input.transpose(1, 2)  # [B, N, 3] -> [B, 3, N] for pointnet
+                    pointnet_out = self.actor_pointnet(pointnet_input)
                     out = torch.cat((regular_obs, pointnet_out), dim=-1)
+                elif not self.has_cnn:
+                    out = obs
 
                 if self.has_rnn:
                     seq_length = obs_dict.get('seq_length', 1)
@@ -586,6 +655,15 @@ class A2CBuilder(NetworkBuilder):
                 self.pointnet_output_dim = params['pointnet']['output_dim']
             else:
                 self.num_points = 0
+
+            self.has_ndf_encoder = ('ndf_encoder' in params and
+                                   params['ndf_encoder'].get('enabled', True))
+            if self.has_ndf_encoder:
+                assert not self.has_pointnet, "ndf_encoder and pointnet are mutually exclusive (ndf_obs not used when point_cloud_obs is used)"
+                self.ndf_encoder = params['ndf_encoder']
+                self.ndf_num_keypoints = self.ndf_encoder['num_keypoints']
+                self.ndf_feature_dim = self.ndf_encoder['ndf_feature_dim']
+                self.ndf_obs_position = self.ndf_encoder.get('obs_position', 'last')
 
     def build(self, name, **kwargs):
         net = A2CBuilder.Network(self.params, **kwargs)
