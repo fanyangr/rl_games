@@ -213,6 +213,7 @@ class NetworkBuilder:
                     activation=cfg.get('activation', 'gelu'),
                     layer_norm_eps=cfg.get('layer_norm_eps', 1e-5),
                     use_keypoint_embed=True,
+                    robot_obj_state_dim=cfg.get('robot_obj_state_dim', 36),
                 )
             if encoder_type != 'transformer':
                 raise ValueError(f"Unknown ndf_encoder.encoder_type={encoder_type!r} (expected 'transformer', 'mlp', or 'minimal')")
@@ -502,7 +503,24 @@ class A2CBuilder(NetworkBuilder):
                     else:
                         ndf_flat = obs[:, :ndf_total]
                         rest_obs = obs[:, ndf_total:]
-                    ndf_out = self.actor_ndf_encoder(ndf_flat)
+                    
+                    # Extract robot/object states (indices 0:36) for conditioning attention
+                    # Only pass if encoder is NDFMinimalEncoder and states are available
+                    robot_obj_states = None
+                    if isinstance(self.actor_ndf_encoder, NDFMinimalEncoder):
+                        robot_obj_state_dim = self.actor_ndf_encoder.robot_obj_state_dim
+                        if robot_obj_state_dim > 0:
+                            assert obs.size(1) == robot_obj_state_dim + ndf_total, (
+                                f"Observation size must equal robot_obj_state_dim + ndf_total: "
+                                f"got obs.size(1)={obs.size(1)}, robot_obj_state_dim={robot_obj_state_dim}, ndf_total={ndf_total}"
+                            )
+                        if robot_obj_state_dim > 0 and rest_obs.size(1) >= robot_obj_state_dim:
+                            robot_obj_states = rest_obs[:, :robot_obj_state_dim]
+                    
+                    if robot_obj_states is not None:
+                        ndf_out = self.actor_ndf_encoder(ndf_flat, robot_obj_states=robot_obj_states)
+                    else:
+                        ndf_out = self.actor_ndf_encoder(ndf_flat)
                     out = torch.cat([rest_obs, ndf_out], dim=-1)
                 elif self.num_points > 0:
                     pointnet_input = obs[:, -3*self.num_points * self.history_length:]

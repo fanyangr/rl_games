@@ -70,8 +70,10 @@ class NDFMinimalEncoder(nn.Module):
     
     Processes keypoints: project -> attention -> LayerNorm -> activation -> flatten.
     Uses a single attention layer to allow cross-keypoint interactions.
+    Can be conditioned on robot/object states by adding them as additional tokens.
     
     - Input:  (B, num_keypoints * ndf_feature_dim)
+    - Optional: robot_obj_states (B, state_dim) - robot and object states (e.g., indices 0:36)
     - Output: (B, num_keypoints * d_model)
     """
 
@@ -85,15 +87,27 @@ class NDFMinimalEncoder(nn.Module):
         activation: str = "gelu",
         layer_norm_eps: float = 1e-5,
         use_keypoint_embed: bool = False,
+        robot_obj_state_dim: int = 36,
+        attention_ndf_only: bool = True,
     ):
         super().__init__()
         self.num_keypoints = num_keypoints
         self.ndf_feature_dim = ndf_feature_dim
         self.d_model = d_model
         self.use_keypoint_embed = use_keypoint_embed
+        self.robot_obj_state_dim = robot_obj_state_dim
+        # If True, attention only sees NDF keypoint tokens
+        # and ignores robot/object state tokens even if provided.
+        self.attention_ndf_only = attention_ndf_only
 
         # Project each keypoint's NDF features to d_model
         self.ndf_proj = nn.Linear(ndf_feature_dim, d_model)
+
+        # Project robot/object states to d_model (if provided)
+        if robot_obj_state_dim > 0 and not attention_ndf_only:
+            self.robot_obj_proj = nn.Linear(robot_obj_state_dim, d_model)
+        else:
+            self.robot_obj_proj = None
 
         # Optional keypoint embeddings (like transformer, but not needed for minimal)
         if self.use_keypoint_embed:
@@ -117,10 +131,12 @@ class NDFMinimalEncoder(nn.Module):
         # Output dimension after flattening: num_keypoints * d_model
         self.output_dim = num_keypoints * d_model
 
-    def forward(self, ndf_flat: torch.Tensor) -> torch.Tensor:
+    def forward(self, ndf_flat: torch.Tensor, robot_obj_states: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             ndf_flat: (batch_size, num_keypoints * ndf_feature_dim)
+            robot_obj_states: Optional (batch_size, robot_obj_state_dim) - robot and object states
+                             (e.g., indices 0:36 from rest_obs). If None, attention is not conditioned.
 
         Returns:
             (batch_size, num_keypoints * d_model) flattened latent for each keypoint
@@ -142,8 +158,31 @@ class NDFMinimalEncoder(nn.Module):
         # Optional: add keypoint embeddings
         if self.keypoint_embed is not None:
             x = x + self.keypoint_embed
-        # Apply attention module (allows cross-keypoint interactions)
-        x, _ = self.attention(x, x, x)  # (B, num_keypoints, d_model)
+        
+        # Condition attention on robot/object states if provided and not disabled
+        if (
+            not self.attention_ndf_only
+            and robot_obj_states is not None
+            and self.robot_obj_proj is not None
+        ):
+            # Project robot/object states to d_model
+            robot_obj_proj = self.robot_obj_proj(robot_obj_states)  # (B, d_model)
+            # Expand to (B, 1, d_model) to add as an additional token
+            robot_obj_proj = robot_obj_proj.unsqueeze(1)  # (B, 1, d_model)
+            
+            # Concatenate robot/object states with keypoints for attention
+            # Now x has shape (B, num_keypoints + 1, d_model)
+            x_with_states = torch.cat([x, robot_obj_proj], dim=1)  # (B, num_keypoints + 1, d_model)
+            
+            # Apply attention: keypoints can attend to robot/object states and vice versa
+            x_attended, _ = self.attention(x_with_states, x_with_states, x_with_states)  # (B, num_keypoints + 1, d_model)
+            
+            # Extract only the keypoint tokens (first num_keypoints tokens)
+            x = x_attended[:, :self.num_keypoints, :]  # (B, num_keypoints, d_model)
+        else:
+            # Apply attention module (allows cross-keypoint interactions only)
+            x, _ = self.attention(x, x, x)  # (B, num_keypoints, d_model)
+        
         # LayerNorm per keypoint (normalizes across d_model dimension)
         # x = self.ln(x)  # (B, num_keypoints, d_model)
         # Activation
