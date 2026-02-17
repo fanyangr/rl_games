@@ -5,9 +5,31 @@ import os
 os.environ.setdefault('PATH', '')
 from collections import deque
 
-import gym
-from gym import spaces
+from rl_games.common.gym_compat import gym, spaces, make as gym_make, GYM_BACKEND
 from copy import copy
+
+
+# When using gymnasium, we need to ensure our wrappers work with old API
+if GYM_BACKEND == "gymnasium":
+    # Create a proper wrapper that converts new API to old API
+    class OldAPIWrapper(gym.Wrapper):
+        """Wrapper to convert Gymnasium's new API to old Gym API for compatibility."""
+        def __init__(self, env):
+            super().__init__(env)
+            self._last_reset_info = {}
+
+        def reset(self, **kwargs):
+            # Get new API result and convert to old API
+            obs, info = self.env.reset(**kwargs)
+            self._last_reset_info = info
+            return obs  # Old API returns only observation
+
+        def step(self, action):
+            # Get new API result and convert to old API
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
+            info['time_outs'] = truncated and not terminated
+            return obs, reward, done, info
 
 
 class InfoWrapper(gym.Wrapper):
@@ -15,6 +37,7 @@ class InfoWrapper(gym.Wrapper):
         gym.RewardWrapper.__init__(self, env)
 
         self.reward = 0
+
     def reset(self, **kwargs):
         self.reward = 0
         return self.env.reset(**kwargs)
@@ -181,6 +204,10 @@ class ClipRewardEnv(gym.RewardWrapper):
     def __init__(self, env):
         gym.RewardWrapper.__init__(self, env)
 
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return obs, self.reward(reward), done, info
+
     def reward(self, reward):
         """Bin reward to {+1, 0, -1} by its sign."""
         return np.sign(reward)
@@ -200,6 +227,14 @@ class WarpFrame(gym.ObservationWrapper):
             self.observation_space = spaces.Box(low=0, high=255,
                 shape=(self.height, self.width, 3), dtype=np.uint8)
 
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self.observation(obs)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return self.observation(obs), reward, done, info
+
     def observation(self, frame):
         import cv2
         if self.grayscale:
@@ -211,7 +246,7 @@ class WarpFrame(gym.ObservationWrapper):
 
 
 class FrameStack(gym.Wrapper):
-    def __init__(self, env, k, flat = False):
+    def __init__(self, env, k, flat=False):
         """
         Stack k last frames.
         Returns lazy array, which is much more memory efficient.
@@ -416,6 +451,14 @@ class ScaledFloatFrame(gym.ObservationWrapper):
     def __init__(self, env):
         gym.ObservationWrapper.__init__(self, env)
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=env.observation_space.shape, dtype=np.float32)
+
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self.observation(obs)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return self.observation(obs), reward, done, info
 
     def observation(self, observation):
         # careful! This undoes the memory optimization, use
@@ -629,27 +672,44 @@ class MaskVelocityWrapper(gym.ObservationWrapper):
         else:
             raise NotImplementedError
 
+    def reset(self, **kwargs):
+        obs = self.env.reset(**kwargs)
+        return self.observation(obs)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return self.observation(obs), reward, done, info
+
     def observation(self, observation):
         return observation * self.mask
 
 
 class OldGymWrapper(gym.Env):
+    """
+    Wraps a gymnasium-based environment to be compatible with the old gym API.
+    This is intended for the edge case where Python < 3.9 (using gym) but the
+    environment (e.g., ManiSkill) is gymnasium-only.
+    """
     def __init__(self, env):
         self.env = env
-
-        import gymnasium
+        try:
+            import gymnasium
+        except ImportError:
+            raise ImportError("OldGymWrapper requires gymnasium to be installed.")
 
         # Convert Gymnasium spaces to Gym spaces
         self.observation_space = self.convert_space(env.observation_space)
         self.action_space = self.convert_space(env.action_space)
 
-
-    # static function to convert Gymnasium spaces to Gym spaces
+    # Static function to convert Gymnasium spaces to Gym spaces
     @staticmethod
     def convert_space(space):
-        import gymnasium
-
         """Recursively convert Gymnasium spaces to Gym spaces."""
+        try:
+            import gymnasium
+        except ImportError:
+            raise ImportError("OldGymWrapper requires gymnasium to be installed.")
+
         if isinstance(space, gymnasium.spaces.Box):
             return gym.spaces.Box(
                 low=space.low,
@@ -708,10 +768,10 @@ class OldGymWrapper(gym.Env):
 # Example usage:
 if __name__ == "__main__":
     # Create a MyoSuite environment
-    env = myosuite.make('myoChallengeDieReorientP2-v0')
+    _env = myosuite.make('myoChallengeDieReorientP2-v0')
 
     # Wrap it with the old Gym-style wrapper
-    env = OldGymWrapper(env)
+    env = OldGymWrapper(_env)
 
     # Use the environment as usual
     observation = env.reset()
@@ -727,12 +787,33 @@ if __name__ == "__main__":
 
 
 def make_atari(env_id, timelimit=True, noop_max=0, skip=4, sticky=False, directory=None, **kwargs):
-    env = gym.make(env_id, **kwargs)
+    # Register ALE environments when needed
+    if 'ALE/' in env_id or 'NoFrameskip' in env_id:
+        try:
+            import ale_py
+            if hasattr(gym, 'register_envs'):
+                gym.register_envs(ale_py)
+            elif hasattr(ale_py, 'register_gymnasium_envs'):
+                ale_py.register_gymnasium_envs()
+            else:
+                import ale_py.envs.gym
+        except Exception:
+            pass  # Already registered or ale_py not available
+
+    # Create the environment
+    if GYM_BACKEND == "gymnasium":
+        # For gymnasium, create raw env and wrap it ourselves
+        # This ensures all wrappers see consistent old API
+        env = gym.make(env_id, **kwargs)
+        env = OldAPIWrapper(env)
+    else:
+        # For old gym, just create normally
+        env = gym.make(env_id, **kwargs)
     if 'Montezuma' in env_id:
         env = MontezumaInfoWrapper(env, room_address=3 if 'Montezuma' in env_id else 1)
         env = StickyActionEnv(env)
     env = InfoWrapper(env)
-    if directory != None:
+    if directory is not None:
         env = gym.wrappers.Monitor(env, directory=directory, force=True)
     if sticky:
         env = StickyActionEnv(env)
