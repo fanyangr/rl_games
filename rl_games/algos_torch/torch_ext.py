@@ -91,23 +91,27 @@ def save_checkpoint(filename, state):
     print("=> saving checkpoint '{}'".format(filename + '.pth'))
     safe_save(state, filename + '.pth')
 
+
+def _strip_torch_compile_prefix_from_state_dict(state_dict):
+    """Normalize state_dict keys saved from torch.compile models for uncompiled load."""
+    stripped = {}
+    for key, value in state_dict.items():
+        new_key = key.replace("._orig_mod.", ".")
+        if new_key.startswith("_orig_mod."):
+            new_key = new_key[len("_orig_mod.") :]
+        stripped[new_key] = value
+    return stripped
+
+
 def load_checkpoint(filename):
     print("=> loading checkpoint '{}'".format(filename))
     state = safe_load(filename)
 
-    # ----------------------------
-    # Fix for missing/unexpected keys:
-    # Remove the '_orig_mod.' prefix so model keys match your uncompiled model
-    if "model" in state:
-        new_model = {}
-        for k, v in state["model"].items():
-            if k.startswith("_orig_mod."):
-                new_key = k[len("_orig_mod."):]
-            else:
-                new_key = k
-            new_model[new_key] = v
-        state["model"] = new_model
-    # ----------------------------
+    # Checkpoints saved after torch.compile use _orig_mod.* key names. Restore happens
+    # before compile in torch_runner, so strip those prefixes for every weight dict.
+    for weight_key in ("model", "assymetric_vf_nets"):
+        if weight_key in state and isinstance(state[weight_key], dict):
+            state[weight_key] = _strip_torch_compile_prefix_from_state_dict(state[weight_key])
 
     return state
 
