@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from rl_games.algos_torch import model_builder, torch_ext
 from rl_games.common import vecenv, schedulers, experience
-from rl_games.common.a2c_common import print_statistics
+from rl_games.common.a2c_common import adjust_max_epochs_for_resume, print_statistics
 from rl_games.interfaces.base_algorithm import BaseAlgorithm
 
 
@@ -274,6 +274,7 @@ class SACAgent(BaseAlgorithm):
         if set_epoch:
             self.epoch_num = weights['epoch']
             self.frame = weights['frame']
+            self.max_epochs = adjust_max_epochs_for_resume(self.epoch_num, self.max_epochs)
 
         self.actor_optimizer.load_state_dict(weights['actor_optimizer'])
         self.critic_optimizer.load_state_dict(weights['critic_optimizer'])

@@ -63,6 +63,29 @@ def print_statistics(print_stats, curr_frames, step_time, step_inference_time, t
             print(f'fps step: {fps_step:.0f} fps step and policy inference: {fps_step_inference:.0f} fps total: {fps_total:.0f} epoch: {epoch_num:.0f}/{max_epochs:.0f} frames: {frame:.0f}/{max_frames:.0f}')
 
 
+def adjust_max_epochs_for_resume(epoch_num, max_epochs, linear_lr=False, scheduler=None, central_value_net=None):
+    """Convert yaml max_epochs (additional epochs) to an absolute target when resuming."""
+    if max_epochs == -1 or epoch_num == 0:
+        return max_epochs
+
+    additional_epochs = max_epochs
+    target_epochs = epoch_num + additional_epochs
+    print(
+        f'=> resuming from epoch {epoch_num}: training {additional_epochs} additional epochs '
+        f'(until epoch {target_epochs})'
+    )
+
+    if linear_lr and isinstance(scheduler, schedulers.LinearScheduler):
+        scheduler.max_steps = target_epochs
+
+    if central_value_net is not None:
+        central_value_net.max_epochs = target_epochs
+        if central_value_net.linear_lr and isinstance(central_value_net.scheduler, schedulers.LinearScheduler):
+            central_value_net.scheduler.max_steps = target_epochs
+
+    return target_epochs
+
+
 class A2CBase(BaseAlgorithm):
 
     def __init__(self, base_name, params):
@@ -665,6 +688,13 @@ class A2CBase(BaseAlgorithm):
         if set_epoch:
             self.epoch_num = weights['epoch']
             self.frame = weights['frame']
+            self.max_epochs = adjust_max_epochs_for_resume(
+                self.epoch_num,
+                self.max_epochs,
+                linear_lr=self.linear_lr,
+                scheduler=self.scheduler,
+                central_value_net=self.central_value_net if self.has_central_value else None,
+            )
 
         if self.has_central_value:
             self.central_value_net.load_state_dict(weights['assymetric_vf_nets'])
