@@ -63,6 +63,19 @@ def print_statistics(print_stats, curr_frames, step_time, step_inference_time, t
             print(f'fps step: {fps_step:.0f} fps step and policy inference: {fps_step_inference:.0f} fps total: {fps_total:.0f} epoch: {epoch_num:.0f}/{max_epochs:.0f} frames: {frame:.0f}/{max_frames:.0f}')
 
 
+def _restore_fused_adam_flags(optimizer):
+    """Checkpoint load_state_dict can overwrite fused=True with None, breaking AMP + Adam on PyTorch 2.x."""
+    for group in optimizer.param_groups:
+        if group.get('fused') is not True:
+            group['fused'] = True
+            group['foreach'] = False
+
+    for param, state in optimizer.state.items():
+        step = state.get('step')
+        if torch.is_tensor(step) and step.device != param.device:
+            state['step'] = step.to(device=param.device)
+
+
 def adjust_max_epochs_for_resume(epoch_num, max_epochs, linear_lr=False, scheduler=None, central_value_net=None):
     """Convert yaml max_epochs (additional epochs) to an absolute target when resuming."""
     if max_epochs == -1 or epoch_num == 0:
@@ -700,8 +713,10 @@ class A2CBase(BaseAlgorithm):
             self.central_value_net.load_state_dict(weights['assymetric_vf_nets'])
             if 'assymetric_vf_optimizer' in weights:
                 self.central_value_net.optimizer.load_state_dict(weights['assymetric_vf_optimizer'])
+                _restore_fused_adam_flags(self.central_value_net.optimizer)
 
         self.optimizer.load_state_dict(weights['optimizer'])
+        _restore_fused_adam_flags(self.optimizer)
 
         self.last_mean_rewards = weights.get('last_mean_rewards', -1000000000)
 
